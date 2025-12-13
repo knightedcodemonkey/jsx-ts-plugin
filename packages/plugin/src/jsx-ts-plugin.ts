@@ -293,14 +293,17 @@ function buildSegments(
 }
 
 function createPlugin(info: ts.server.PluginCreateInfo) {
+  if (!info || !info.languageService)
+    return info?.languageService ?? ({} as ts.LanguageService)
   const config = normalizeConfig(info.config)
   const tags = new Set(config.tags && config.tags.length ? config.tags : DEFAULT_TAGS)
 
   const proxy: ts.LanguageService = Object.create(null)
-  for (const k of Object.keys(info.languageService) as Array<keyof ts.LanguageService>) {
-    const x = info.languageService[k]
+  const baseLs = info.languageService
+  for (const k of Object.keys(baseLs) as Array<keyof ts.LanguageService>) {
+    const x = baseLs[k]
     // @ts-expect-error - copying from language service
-    proxy[k] = typeof x === 'function' ? x.bind(info.languageService) : x
+    proxy[k] = typeof x === 'function' ? x.bind(baseLs) : x
   }
 
   proxy.getSemanticDiagnostics = (fileName: string) => {
@@ -395,6 +398,12 @@ function mapDiagnosticToOriginal(
   }
 }
 
-export function create(info: ts.server.PluginCreateInfo) {
-  return createPlugin(info)
+function init(_modules: { typescript: typeof ts }) {
+  return {
+    create(info: ts.server.PluginCreateInfo) {
+      return createPlugin(info)
+    },
+  }
 }
+
+export = init

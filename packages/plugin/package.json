@@ -1,26 +1,24 @@
 {
   "name": "@knighted/jsx-ts-plugin",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "TypeScript language service plugin for @knighted/jsx tagged template diagnostics.",
-  "main": "plugin.cjs",
-  "types": "dist/cjs/jsx-ts-plugin.d.ts",
+  "main": "dist/jsx-ts-plugin.js",
+  "types": "dist/jsx-ts-plugin.d.ts",
   "type": "commonjs",
   "exports": {
     ".": {
-      "import": "./dist/esm/jsx-ts-plugin.mjs",
-      "require": "./plugin.cjs",
-      "default": "./plugin.cjs"
+      "require": "./dist/jsx-ts-plugin.js",
+      "default": "./dist/jsx-ts-plugin.js"
     },
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "duel --dirs",
+    "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "prepack": "npm run build"
   },
   "files": [
-    "dist",
-    "plugin.cjs"
+    "dist"
   ],
   "keywords": [
     "typescript",
