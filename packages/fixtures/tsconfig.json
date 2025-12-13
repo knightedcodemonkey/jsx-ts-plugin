@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@knighted/jsx",
+    "plugins": [
+      {
+        "name": "@knighted/jsx-ts-plugin",
+        "tags": ["jsx", "reactJsx"],
+        "mode": "react"
+      }
+    ]
+  },
+  "include": ["src/**/*"]
+}
