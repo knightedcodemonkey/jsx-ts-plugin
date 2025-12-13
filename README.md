@@ -38,7 +38,6 @@ Options:
 
 ## Notes / Limitations
 
-- Diagnostics are coarse-mapped to the start of the template; future versions will improve span accuracy and add completions.
 - The plugin rebuilds a transformed program per file for diagnostics; acceptable for small/medium projects, but we will add caching as features grow.
 - Requires TypeScript >= 5.4 (peer dependency).
 
