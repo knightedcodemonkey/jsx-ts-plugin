@@ -187,6 +187,18 @@ function computeTemplateInfo(
   return { kind: 'spans', body, headText, spans }
 }
 
+function cookedSpan(
+  literal:
+    | ts.TemplateHead
+    | ts.TemplateMiddle
+    | ts.TemplateTail
+    | ts.NoSubstitutionTemplateLiteral,
+  sourceFile: ts.SourceFile,
+) {
+  const start = literal.getStart(sourceFile) + 1
+  return { start, end: start + literal.text.length }
+}
+
 function buildSegments(
   node: ts.TaggedTemplateExpression,
   sourceFile: ts.SourceFile,
@@ -212,23 +224,28 @@ function buildSegments(
   rCursor += 1
 
   if (tplInfo.kind === 'no-substitution') {
+    const cooked = cookedSpan(
+      node.template as ts.NoSubstitutionTemplateLiteral,
+      sourceFile,
+    )
     const text = node.template.getText(sourceFile)
     segments.push({
       rStart: rCursor,
       rEnd: rCursor + text.length,
-      oStart: node.template.getStart(sourceFile),
-      oEnd: node.template.getEnd(),
+      oStart: cooked.start,
+      oEnd: cooked.end,
     })
     rCursor += text.length
   } else {
     const tpl = node.template as ts.TemplateExpression
     const head = tpl.head
     const headText = tplInfo.headText
+    const cookedHead = cookedSpan(head, sourceFile)
     segments.push({
       rStart: rCursor,
       rEnd: rCursor + headText.length,
-      oStart: head.getStart(sourceFile),
-      oEnd: head.getEnd(),
+      oStart: cookedHead.start,
+      oEnd: cookedHead.end,
     })
     rCursor += headText.length
 
@@ -265,11 +282,12 @@ function buildSegments(
       }
 
       const litText = info.litText
+      const cooked = cookedSpan(nodeSpan.literal, sourceFile)
       segments.push({
         rStart: rCursor,
         rEnd: rCursor + litText.length,
-        oStart: nodeSpan.literal.getStart(sourceFile),
-        oEnd: nodeSpan.literal.getEnd(),
+        oStart: cooked.start,
+        oEnd: cooked.end,
       })
       rCursor += litText.length
     })
@@ -297,6 +315,13 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     return info?.languageService ?? ({} as ts.LanguageService)
   const config = normalizeConfig(info.config)
   const tags = new Set(config.tags && config.tags.length ? config.tags : DEFAULT_TAGS)
+
+  const diagKey = (d: ts.Diagnostic) => {
+    const msg = ts.flattenDiagnosticMessageText(d.messageText, '\n')
+    const start = d.start ?? -1
+    const length = d.length ?? -1
+    return `${d.code}:${start}:${length}:${msg}`
+  }
 
   const proxy: ts.LanguageService = Object.create(null)
   const baseLs = info.languageService
@@ -353,7 +378,10 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
       .filter(d => d.file && path.normalize(d.file.fileName) === normalizedTarget)
       .map(diag => mapDiagnosticToOriginal(diag, sourceFile, transformed.spans))
 
-    return [...base, ...extraDiags]
+    const baseKeys = new Set(base.map(diagKey))
+    const dedupedExtra = extraDiags.filter(d => !baseKeys.has(diagKey(d)))
+
+    return [...base, ...dedupedExtra]
   }
 
   return proxy
@@ -386,8 +414,8 @@ function mapDiagnosticToOriginal(
     const offsetInSeg = diagnostic.start - seg.rStart
     const origLen = seg.oEnd - seg.oStart
     const mappedOffset = Math.min(offsetInSeg, Math.max(origLen - 1, 0))
-    mappedStart = seg.oStart + mappedOffset
-    mappedLength = Math.min(origLen - mappedOffset, diagnostic.length ?? 1)
+    mappedStart = Math.max(seg.oStart, seg.oStart + mappedOffset)
+    mappedLength = Math.max(0, Math.min(origLen - mappedOffset, diagnostic.length ?? 1))
   }
 
   return {
