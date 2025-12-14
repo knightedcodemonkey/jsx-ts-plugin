@@ -22,8 +22,10 @@ npm install -D @knighted/jsx-ts-plugin
     "plugins": [
       {
         "name": "@knighted/jsx-ts-plugin",
-        "tags": ["jsx", "reactJsx"],
-        "mode": "react"
+        "tagModes": {
+          "jsx": "dom",
+          "reactJsx": "react"
+        }
       }
     ]
   }
@@ -32,9 +34,23 @@ npm install -D @knighted/jsx-ts-plugin
 
 Options:
 
-- `tags`: tagged template identifiers to treat as JSX (default: `["jsx", "reactJsx"]`).
-- `mode`: reserved for future ("react" | "dom"), currently informational.
+- `tagModes`: map each tagged template identifier to either `"dom"` or `"react"`. Defaults to `{ "jsx": "dom", "reactJsx": "react" }` so mixed DOM + React projects work with zero config.
+- `tags` / `mode`: legacy options that still work but are superseded by `tagModes`.
 - `maxTemplatesPerFile`: optional guardrail to skip files with many templates.
+
+> [!NOTE]
+> TypeScript language-service plugins only run inside `tsserver` (your editor). Running `tsc` or `tsc --noEmit` directly will **not** load this plugin, so command-line builds will not surface these diagnostics unless you pair the project with a separate compiler transform.
+
+Inline overrides:
+
+- `/* @jsx-dom */` — forces the next tagged template to run in DOM mode.
+- `/* @jsx-react */` — forces the next tagged template to run in React mode.
+
+The inline directives can appear as block or line comments and apply to the very next tagged template literal, even if it uses a custom identifier that is not declared in `tagModes`.
+
+## TSX runtimes
+
+`@knighted/jsx` now bundles the `@knighted/jsx/jsx-runtime` entry, so setting `"jsxImportSource": "@knighted/jsx"` works out of the box. No extra `paths` overrides or stub files are required inside this plugin anymore. The runtime module continues to exist strictly for TypeScript diagnostics—use the `jsx` / `reactJsx` tagged templates at runtime.
 
 ## Notes / Limitations
 
@@ -47,5 +63,7 @@ Options:
 npm install
 npm run build
 ```
+
+The root workspace intentionally lists `@knighted/jsx` as a `file:` devDependency so VS Code’s tsserver always resolves the locally built runtime while testing the plugin. Make sure you install from the repo root (and re-run `npm install` if you change the runtime) so those symlinks remain intact.
 
 Publish is handled by npm `prepare` via `npm run build`.
