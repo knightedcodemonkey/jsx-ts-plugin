@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@knighted/jsx": "^1.3.0",
+    "@knighted/jsx": "file:../../jsx",
     "@knighted/jsx-ts-plugin": "file:../plugin"
   }
 }

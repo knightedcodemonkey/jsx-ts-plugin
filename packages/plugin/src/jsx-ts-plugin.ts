@@ -1,9 +1,10 @@
 import path from 'node:path'
 import * as ts from 'typescript/lib/tsserverlibrary.js'
 
-type PluginConfig = {
-  tags?: string[]
-  mode?: 'react' | 'dom'
+type Mode = 'dom' | 'react'
+
+type NormalizedConfig = {
+  tagModes: Map<string, Mode>
   maxTemplatesPerFile?: number
 }
 
@@ -47,47 +48,150 @@ type TransformedFile = {
   spans: ReplacementSpan[]
 }
 
-const DEFAULT_TAGS = ['jsx', 'reactJsx']
+const DEFAULT_TAG_MODES: Record<string, Mode> = {
+  jsx: 'dom',
+  reactJsx: 'react',
+}
 
-function normalizeConfig(config: unknown): PluginConfig {
-  const base: PluginConfig = {}
+const DIRECTIVE_PATTERN =
+  /\/\*\s*@jsx-(dom|react)\s*\*\/|\/\/\s*@jsx-(dom|react)\b[^\n\r]*/g
+
+type ModeDirective = {
+  end: number
+  mode: Mode
+}
+
+function parseMode(mode: unknown): Mode | undefined {
+  if (mode === 'dom' || mode === 'react') return mode
+  if (mode === 'runtime') return 'dom'
+  return undefined
+}
+
+function normalizeConfig(config: unknown): NormalizedConfig {
+  const tagModes = new Map<string, Mode>(Object.entries(DEFAULT_TAG_MODES))
+  const normalized: NormalizedConfig = { tagModes }
+
   if (config && typeof config === 'object') {
     const c = config as Record<string, unknown>
-    if (Array.isArray(c.tags) && c.tags.every(tag => typeof tag === 'string')) {
-      base.tags = c.tags as string[]
+    const legacyMode = parseMode(c.mode)
+
+    if (typeof c.tag === 'string' && c.tag.trim().length) {
+      const mode = legacyMode ?? 'dom'
+      tagModes.set(c.tag.trim(), mode)
     }
-    if (c.mode === 'react' || c.mode === 'dom') base.mode = c.mode
-    if (typeof c.maxTemplatesPerFile === 'number')
-      base.maxTemplatesPerFile = c.maxTemplatesPerFile
+
+    if (Array.isArray(c.tags)) {
+      const mode = legacyMode ?? 'dom'
+      c.tags.forEach(tag => {
+        if (typeof tag === 'string') {
+          const normalizedTag = tag.trim()
+          if (normalizedTag.length) {
+            tagModes.set(normalizedTag, mode)
+          }
+        }
+      })
+    }
+
+    if (c.tagModes && typeof c.tagModes === 'object') {
+      Object.entries(c.tagModes).forEach(([tagName, mode]) => {
+        const parsed = parseMode(mode)
+        const normalizedTag = tagName.trim()
+        if (parsed && normalizedTag.length) {
+          tagModes.set(normalizedTag, parsed)
+        }
+      })
+    }
+
+    if (typeof c.maxTemplatesPerFile === 'number') {
+      normalized.maxTemplatesPerFile = c.maxTemplatesPerFile
+    }
   }
-  return base
+
+  return normalized
 }
 
 function collectReplacements(
   sourceFile: ts.SourceFile,
-  tagSet: Set<string>,
+  tagModes: Map<string, Mode>,
 ): Array<{ node: ts.TaggedTemplateExpression; replacement: string }> {
   const replacements: Array<{ node: ts.TaggedTemplateExpression; replacement: string }> =
     []
   const text = sourceFile.getFullText()
+  const directives = extractModeDirectives(text)
+  const taggedTemplates: ts.TaggedTemplateExpression[] = []
 
   const visitor = (node: ts.Node) => {
-    if (
-      ts.isTaggedTemplateExpression(node) &&
-      ts.isIdentifier(node.tag) &&
-      tagSet.has(node.tag.text)
-    ) {
-      const info = computeTemplateInfo(node, sourceFile, text)
-
-      const replacement = `(${info.body})`
-      replacements.push({ node, replacement })
+    if (ts.isTaggedTemplateExpression(node) && ts.isIdentifier(node.tag)) {
+      taggedTemplates.push(node)
     }
 
     ts.forEachChild(node, visitor)
   }
 
   ts.forEachChild(sourceFile, visitor)
+
+  const overrides = resolveDirectiveOverrides(taggedTemplates, directives, sourceFile)
+
+  taggedTemplates.forEach(node => {
+    if (!ts.isIdentifier(node.tag)) return
+    const tagName = node.tag.text
+    const override = overrides.get(node)
+    const mode = override ?? tagModes.get(tagName)
+    if (!mode) return
+
+    const info = computeTemplateInfo(node, sourceFile, text)
+    const replacement = `(${info.body})`
+    replacements.push({ node, replacement })
+  })
+
   return replacements
+}
+
+function extractModeDirectives(text: string): ModeDirective[] {
+  const directives: ModeDirective[] = []
+  if (!text.length) return directives
+
+  let match: RegExpExecArray | null
+  while ((match = DIRECTIVE_PATTERN.exec(text))) {
+    const mode = (match[1] ?? match[2]) as Mode | undefined
+    if (!mode) continue
+    directives.push({ end: match.index + match[0].length, mode })
+  }
+
+  return directives.sort((a, b) => a.end - b.end)
+}
+
+function resolveDirectiveOverrides(
+  nodes: ts.TaggedTemplateExpression[],
+  directives: ModeDirective[],
+  sourceFile: ts.SourceFile,
+) {
+  const overrides = new Map<ts.TaggedTemplateExpression, Mode>()
+  if (!directives.length || !nodes.length) return overrides
+
+  const sortedNodes = nodes
+    .filter(node => ts.isIdentifier(node.tag))
+    .sort((a, b) => a.getStart(sourceFile) - b.getStart(sourceFile))
+
+  let directiveIdx = 0
+  for (const node of sortedNodes) {
+    let override: Mode | undefined
+    while (
+      directiveIdx < directives.length &&
+      directives[directiveIdx].end <= node.getStart(sourceFile)
+    ) {
+      override = directives[directiveIdx].mode
+      directiveIdx += 1
+    }
+
+    if (override) {
+      overrides.set(node, override)
+    }
+
+    if (directiveIdx >= directives.length) break
+  }
+
+  return overrides
 }
 
 function applyReplacements(
@@ -314,7 +418,7 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
   if (!info || !info.languageService)
     return info?.languageService ?? ({} as ts.LanguageService)
   const config = normalizeConfig(info.config)
-  const tags = new Set(config.tags && config.tags.length ? config.tags : DEFAULT_TAGS)
+  const tagModes = config.tagModes
 
   const diagKey = (d: ts.Diagnostic) => {
     const msg = ts.flattenDiagnosticMessageText(d.messageText, '\n')
@@ -339,7 +443,7 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     const sourceFile = program.getSourceFile(fileName)
     if (!sourceFile) return base
 
-    const replacements = collectReplacements(sourceFile, tags)
+    const replacements = collectReplacements(sourceFile, tagModes)
     if (!replacements.length) return base
     if (config.maxTemplatesPerFile && replacements.length > config.maxTemplatesPerFile)
       return base
@@ -394,10 +498,28 @@ function mapDiagnosticToOriginal(
 ): ts.Diagnostic {
   if (!diagnostic.file || diagnostic.start == null) return diagnostic
 
+  const adjustForEarlierSpans = (pos: number) => {
+    let delta = 0
+    for (const span of spans) {
+      if (span.replacementEnd > pos) break
+      const replacementLength = span.replacementEnd - span.replacementStart
+      const originalLength = span.originalEnd - span.originalStart
+      delta += replacementLength - originalLength
+    }
+    return Math.max(0, pos - delta)
+  }
+
   const span = spans.find(
     s => diagnostic.start! >= s.replacementStart && diagnostic.start! <= s.replacementEnd,
   )
-  if (!span) return diagnostic
+  if (!span) {
+    const adjustedStart = adjustForEarlierSpans(diagnostic.start)
+    return {
+      ...diagnostic,
+      file: sourceFile,
+      start: adjustedStart,
+    }
+  }
 
   const local = diagnostic.start - span.replacementStart
   const seg = span.segments.find(

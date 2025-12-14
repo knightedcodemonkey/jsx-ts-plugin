@@ -6,14 +6,13 @@
     "strict": true,
     "jsx": "react-jsx",
     "jsxImportSource": "@knighted/jsx",
-    "paths": {
-      "@knighted/jsx/jsx-runtime": ["./jsx-runtime.d.ts"]
-    },
     "plugins": [
       {
         "name": "@knighted/jsx-ts-plugin",
-        "tags": ["jsx", "reactJsx"],
-        "mode": "react"
+        "tagModes": {
+          "jsx": "dom",
+          "reactJsx": "react"
+        }
       }
     ]
   },
