@@ -10,7 +10,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
-    "sourceMap": false,
+    "sourceMap": true,
+    "inlineSources": true,
     "incremental": false
   },
   "include": ["src/**/*"]

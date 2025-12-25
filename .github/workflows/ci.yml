@@ -27,6 +27,8 @@ jobs:
         uses: actions/setup-node@v4.3.0
         with:
           node-version: ${{ matrix.node-version }}
+      - name: Update npm
+        run: npm install -g npm@10.9.2
       - name: Provision published @knighted/jsx
         run: |
           rm -rf ../jsx
@@ -35,7 +37,7 @@ jobs:
           tar -xzf "$TARBALL" -C ../jsx --strip-components=1
           rm "$TARBALL"
       - name: Install Dependencies
-        run: HUSKY=0 npm ci --ignore-scripts
+        run: npm ci --ignore-scripts
       - name: Save error log
         uses: actions/upload-artifact@v4.6.2
         if: ${{ failure() }}
