@@ -12,6 +12,8 @@ jobs:
   ci:
     name: CI (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    env:
+      KNIGHTED_JSX_VERSION: '1.5.1'
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +27,13 @@ jobs:
         uses: actions/setup-node@v4.3.0
         with:
           node-version: ${{ matrix.node-version }}
+      - name: Provision published @knighted/jsx
+        run: |
+          rm -rf ../jsx
+          mkdir -p ../jsx
+          TARBALL=$(npm pack @knighted/jsx@${KNIGHTED_JSX_VERSION})
+          tar -xzf "$TARBALL" -C ../jsx --strip-components=1
+          rm "$TARBALL"
       - name: Install Dependencies
         run: npm ci
       - name: Save error log
