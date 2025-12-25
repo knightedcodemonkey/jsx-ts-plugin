@@ -52,10 +52,28 @@ function loadSamplesFromCases() {
   })
 }
 
-const samples = loadSamplesFromCases()
+const requestedSamples = (process.env.SAMPLE || process.env.SAMPLES || '')
+  .split(',')
+  .map(name => name.trim())
+  .filter(Boolean)
+
+const samples = loadSamplesFromCases().filter(sample => {
+  if (!requestedSamples.length) return true
+  return requestedSamples.some(name =>
+    sample.name.toLowerCase().includes(name.toLowerCase()),
+  )
+})
 
 if (!samples.length) {
-  console.error('No verification samples found. Did you add any files under test/cases?')
+  if (requestedSamples.length) {
+    console.error(
+      `No verification samples matched filter: ${requestedSamples.map(n => `'${n}'`).join(', ')}`,
+    )
+  } else {
+    console.error(
+      'No verification samples found. Did you add any files under test/cases?',
+    )
+  }
   process.exitCode = 1
   process.exit()
 }

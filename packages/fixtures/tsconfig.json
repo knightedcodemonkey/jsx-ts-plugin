@@ -6,6 +6,7 @@
     "strict": true,
     "jsx": "react-jsx",
     "jsxImportSource": "@knighted/jsx",
+    "noEmit": true,
     "plugins": [
       {
         "name": "@knighted/jsx-ts-plugin",

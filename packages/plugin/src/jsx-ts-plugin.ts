@@ -198,19 +198,20 @@ function applyReplacements(
   sourceFile: ts.SourceFile,
   replacements: Array<{ node: ts.TaggedTemplateExpression; replacement: string }>,
 ): TransformedFile {
-  let transformed = ''
-  let cursor = 0
+  let text = sourceFile.getFullText()
   const spans: ReplacementSpan[] = []
-  const fullText = sourceFile.getFullText()
 
-  for (const { node, replacement } of replacements) {
+  const sorted = replacements
+    .slice()
+    .sort((a, b) => b.node.getStart(sourceFile) - a.node.getStart(sourceFile))
+
+  for (const { node, replacement } of sorted) {
     const start = node.getStart(sourceFile)
     const end = node.getEnd()
+    const replacementStart = start
+    const replacementEnd = start + replacement.length
 
-    transformed += fullText.slice(cursor, start)
-    const replacementStart = transformed.length
-    transformed += replacement
-    const replacementEnd = transformed.length
+    text = `${text.slice(0, start)}${replacement}${text.slice(end)}`
 
     spans.push({
       originalStart: start,
@@ -219,13 +220,11 @@ function applyReplacements(
       replacementEnd,
       segments: buildSegments(node, sourceFile, replacementStart),
     })
-
-    cursor = end
   }
 
-  transformed += fullText.slice(cursor)
+  spans.sort((a, b) => a.replacementStart - b.replacementStart)
 
-  return { text: transformed, spans }
+  return { text, spans }
 }
 
 function lastNonWhitespaceChar(value: string): string | undefined {
