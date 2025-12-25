@@ -12,6 +12,8 @@ jobs:
   ci:
     name: CI (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    env:
+      KNIGHTED_JSX_VERSION: '1.5.1'
     strategy:
       fail-fast: false
       matrix:
@@ -25,8 +27,17 @@ jobs:
         uses: actions/setup-node@v4.3.0
         with:
           node-version: ${{ matrix.node-version }}
+      - name: Update npm
+        run: npm install -g npm@11.6.2
+      - name: Provision published @knighted/jsx
+        run: |
+          rm -rf ../jsx
+          mkdir -p ../jsx
+          TARBALL=$(npm pack @knighted/jsx@${KNIGHTED_JSX_VERSION})
+          tar -xzf "$TARBALL" -C ../jsx --strip-components=1
+          rm "$TARBALL"
       - name: Install Dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Save error log
         uses: actions/upload-artifact@v4.6.2
         if: ${{ failure() }}
@@ -37,3 +48,10 @@ jobs:
         run: npm pack --pack-destination=packages/plugin -w @knighted/jsx-ts-plugin
       - name: Lint
         run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: knightedcodemonkey/jsx-ts-plugin
