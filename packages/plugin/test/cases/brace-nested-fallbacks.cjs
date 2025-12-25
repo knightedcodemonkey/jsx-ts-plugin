@@ -1,0 +1,36 @@
+module.exports = [
+  {
+    name: 'brace-nested-fallbacks.tsx',
+    expectDiagnostics: [
+      {
+        code: 2322,
+        messageIncludes: "Type 'true' is not assignable",
+      },
+    ],
+    source: [
+      '/// <reference lib="dom" />',
+      "import { jsx } from '@knighted/jsx'",
+      '',
+      'const invalidHandler = true',
+      '',
+      'export const view = jsx`',
+      '  <>',
+      '    ${"   "}',
+      '    <>',
+      '      ${"\\n        "}',
+      '      <>',
+      '        ${"\\n          "}',
+      '        <button onClick=${invalidHandler}>',
+      '          ${"\\n            "}',
+      '          Click nested',
+      '        </button>',
+      '        ${"\\n          "}',
+      '      </>',
+      '      ${"\\n        "}',
+      '    </>',
+      '    ${"\\n"}',
+      '  </>',
+      '`',
+    ].join('\n'),
+  },
+]

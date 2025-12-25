@@ -63,8 +63,9 @@ if (!samples.length) {
 const noopWatcher = () => ({ close() {} })
 const pluginFactory = initPlugin({ typescript: ts })
 
-function createLanguageService(fileName, text) {
-  const files = new Map([[fileName, { text, version: 0 }]])
+function createLanguageService(sample) {
+  const fileName = path.join(process.cwd(), '__virtual__', sample.name)
+  const files = new Map([[fileName, { text: sample.source, version: 0 }]])
   const fileExists = file => files.has(file) || ts.sys.fileExists(file)
   const readFile = file =>
     files.has(file) ? files.get(file).text : ts.sys.readFile(file)
@@ -117,7 +118,7 @@ function createLanguageService(fileName, text) {
   const plugin = pluginFactory.create({
     languageService,
     languageServiceHost: host,
-    config: {},
+    config: sample.config ?? {},
     project: {
       getCompilerOptions: () => compilerOptions,
       getRootFileNames: () => [...files.keys()],
@@ -133,7 +134,7 @@ function createLanguageService(fileName, text) {
     },
   })
 
-  return plugin
+  return { plugin, fileName }
 }
 
 function formatDiagnostic(diagnostic) {
@@ -151,8 +152,7 @@ function formatDiagnostic(diagnostic) {
 let hasFailures = false
 
 for (const sample of samples) {
-  const fileName = path.join(process.cwd(), '__virtual__', sample.name)
-  const plugin = createLanguageService(fileName, sample.source)
+  const { plugin, fileName } = createLanguageService(sample)
   const diagnostics = plugin.getSemanticDiagnostics(fileName)
 
   if (!sample.expectDiagnostics.length) {
