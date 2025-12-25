@@ -1,34 +1,19 @@
-import { jsx } from '@knighted/jsx'
-import type { JsxRenderable } from '@knighted/jsx'
+import { DomBadge } from './views/dom-badge.js'
+import { DomErrors } from './views/dom-errors.js'
+import { DomMenu } from './views/dom-menu.js'
+import { ReactCard } from './views/react-card.js'
+import { ReactErrors } from './views/react-errors.js'
 
-type DomBadgeProps = {
-  label: JsxRenderable
-}
+export { DomBadge, DomErrors, DomMenu, ReactCard, ReactErrors }
 
-export const DomBadge = ({ label }: DomBadgeProps): HTMLElement => {
-  let clicks = 0
-  const counterText = jsx`<span>Clicked ${clicks} times</span>` as HTMLSpanElement
-
-  const badge = jsx`
-    <article class="dom-badge">
-      <header>
-        <h2>Lit + DOM with jsx</h2>
-        <p data-kind="react">${label}</p>
-      </header>
-      <button
-        type="button"
-        data-kind="dom-counter"
-        onClick=${() => {
-          clicks += 1
-          counterText.textContent = `Clicked ${clicks} times`
-        }}
-      >
-        ${counterText}
-      </button>
-    </article>
-  ` as HTMLDivElement
-
-  return badge
-}
-
-export const view = DomBadge({ label: 'Badge' })
+export const view = [
+  DomBadge({ label: 'Badge' }),
+  DomMenu(),
+  ReactCard({
+    title: 'JSX Plugin',
+    description: 'React-style tagged templates with diagnostics.',
+    footer: 'Rendered via fixtures workspace.',
+  }),
+  DomErrors(),
+  ReactErrors(),
+]

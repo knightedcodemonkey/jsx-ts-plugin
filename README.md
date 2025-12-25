@@ -8,7 +8,6 @@ Diagnostics-only TypeScript language service plugin for `@knighted/jsx` tagged t
 
 - MVP: diagnostics only (invalid props/attributes, JSX syntax issues, interpolation type errors).
 - No completions/hover/definitions yet.
-- Diagnostics are mapped back to the template start; positions are approximate in this first cut.
 
 ## Install
 
@@ -53,6 +52,12 @@ The inline directives can appear as block or line comments and apply to the very
 ## TSX runtimes
 
 `@knighted/jsx` now bundles the `@knighted/jsx/jsx-runtime` entry, so setting `"jsxImportSource": "@knighted/jsx"` works out of the box. No extra `paths` overrides or stub files are required inside this plugin anymore. The runtime module continues to exist strictly for TypeScript diagnostics—use the `jsx` / `reactJsx` tagged templates at runtime.
+
+> [!IMPORTANT]
+> The DOM helper (`jsx`) returns real `HTMLElement` instances / `JsxRenderable` values, while `reactJsx` deliberately returns React elements. Treat them as separate ecosystems—React-mode templates are **not** assignable to the DOM renderable types, and that mismatch is expected. When mixing both helpers in the same project (such as the fixtures workspace), avoid forcing React elements to satisfy DOM typings.
+
+> [!NOTE]
+> Even in DOM mode, the helper surfaces the broader `JsxRenderable` union (`Node`, strings, arrays, etc.). Let TypeScript infer the return type for helpers like `` const view = () => jsx`…` `` and only cast to HTMLElement` when you truly need DOM-only APIs. This keeps editors from raising false positives (e.g., “Type 'JsxRenderable' is not assignable to type 'HTMLElement'”) while still allowing consumers to assert a stricter type at the call site when necessary.
 
 ## Notes / Limitations
 

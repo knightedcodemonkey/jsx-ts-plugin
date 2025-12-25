@@ -13,12 +13,18 @@ type ReplacementSpan = {
   originalEnd: number
   replacementStart: number
   replacementEnd: number
-  segments: Array<{
-    rStart: number
-    rEnd: number
-    oStart?: number
-    oEnd?: number
-  }>
+  segments: Array<Segment>
+}
+
+type SegmentKind = 'expr' | 'literal' | 'inserted'
+
+type Segment = {
+  kind: SegmentKind
+  rStart: number
+  rEnd: number
+  oStart?: number
+  oEnd?: number
+  fallback?: 'previous' | 'next'
 }
 
 type TemplateSpanInfo = {
@@ -198,19 +204,20 @@ function applyReplacements(
   sourceFile: ts.SourceFile,
   replacements: Array<{ node: ts.TaggedTemplateExpression; replacement: string }>,
 ): TransformedFile {
-  let transformed = ''
-  let cursor = 0
+  let text = sourceFile.getFullText()
   const spans: ReplacementSpan[] = []
-  const fullText = sourceFile.getFullText()
 
-  for (const { node, replacement } of replacements) {
+  const sorted = replacements
+    .slice()
+    .sort((a, b) => b.node.getStart(sourceFile) - a.node.getStart(sourceFile))
+
+  for (const { node, replacement } of sorted) {
     const start = node.getStart(sourceFile)
     const end = node.getEnd()
+    const replacementStart = start
+    const replacementEnd = start + replacement.length
 
-    transformed += fullText.slice(cursor, start)
-    const replacementStart = transformed.length
-    transformed += replacement
-    const replacementEnd = transformed.length
+    text = `${text.slice(0, start)}${replacement}${text.slice(end)}`
 
     spans.push({
       originalStart: start,
@@ -219,13 +226,25 @@ function applyReplacements(
       replacementEnd,
       segments: buildSegments(node, sourceFile, replacementStart),
     })
-
-    cursor = end
   }
 
-  transformed += fullText.slice(cursor)
+  spans.sort((a, b) => a.replacementStart - b.replacementStart)
 
-  return { text: transformed, spans }
+  let cumulativeDelta = 0
+  for (const span of spans) {
+    const replacementLength = span.replacementEnd - span.replacementStart
+    const originalLength = span.originalEnd - span.originalStart
+    span.replacementStart += cumulativeDelta
+    span.replacementEnd = span.replacementStart + replacementLength
+    span.segments = span.segments.map(seg => ({
+      ...seg,
+      rStart: seg.rStart + cumulativeDelta,
+      rEnd: seg.rEnd + cumulativeDelta,
+    }))
+    cumulativeDelta += replacementLength - originalLength
+  }
+
+  return { text, spans }
 }
 
 function lastNonWhitespaceChar(value: string): string | undefined {
@@ -307,19 +326,15 @@ function buildSegments(
   node: ts.TaggedTemplateExpression,
   sourceFile: ts.SourceFile,
   replacementStart: number,
-): Array<{ rStart: number; rEnd: number; oStart?: number; oEnd?: number }> {
-  const segments: Array<{
-    rStart: number
-    rEnd: number
-    oStart?: number
-    oEnd?: number
-  }> = []
+): Segment[] {
+  const segments: Segment[] = []
   const fullText = sourceFile.getFullText()
   const tplInfo = computeTemplateInfo(node, sourceFile, fullText)
 
   let rCursor = 0
   // leading "("
   segments.push({
+    kind: 'inserted',
     rStart: rCursor,
     rEnd: rCursor + 1,
     oStart: node.getStart(sourceFile),
@@ -334,6 +349,7 @@ function buildSegments(
     )
     const text = node.template.getText(sourceFile)
     segments.push({
+      kind: 'literal',
       rStart: rCursor,
       rEnd: rCursor + text.length,
       oStart: cooked.start,
@@ -346,6 +362,7 @@ function buildSegments(
     const headText = tplInfo.headText
     const cookedHead = cookedSpan(head, sourceFile)
     segments.push({
+      kind: 'literal',
       rStart: rCursor,
       rEnd: rCursor + headText.length,
       oStart: cookedHead.start,
@@ -359,15 +376,18 @@ function buildSegments(
 
       if (info.needsBraces) {
         segments.push({
+          kind: 'inserted',
           rStart: rCursor,
           rEnd: rCursor + 1,
           oStart: info.exprStart,
-          oEnd: info.exprStart + 1,
+          oEnd: info.exprStart,
+          fallback: 'next',
         })
         rCursor += 1
       }
 
       segments.push({
+        kind: 'expr',
         rStart: rCursor,
         rEnd: rCursor + exprText.length,
         oStart: info.exprStart,
@@ -377,10 +397,12 @@ function buildSegments(
 
       if (info.needsBraces) {
         segments.push({
+          kind: 'inserted',
           rStart: rCursor,
           rEnd: rCursor + 1,
-          oStart: info.exprEnd - 1,
+          oStart: info.exprEnd,
           oEnd: info.exprEnd,
+          fallback: 'previous',
         })
         rCursor += 1
       }
@@ -388,6 +410,7 @@ function buildSegments(
       const litText = info.litText
       const cooked = cookedSpan(nodeSpan.literal, sourceFile)
       segments.push({
+        kind: 'literal',
         rStart: rCursor,
         rEnd: rCursor + litText.length,
         oStart: cooked.start,
@@ -399,6 +422,7 @@ function buildSegments(
 
   // trailing ")"
   segments.push({
+    kind: 'inserted',
     rStart: rCursor,
     rEnd: rCursor + 1,
     oStart: node.getEnd() - 1,
@@ -407,10 +431,12 @@ function buildSegments(
 
   // adjust by replacementStart for global offsets
   return segments.map(seg => ({
+    kind: seg.kind,
     rStart: seg.rStart + replacementStart,
     rEnd: seg.rEnd + replacementStart,
     oStart: seg.oStart,
     oEnd: seg.oEnd,
+    fallback: seg.fallback,
   }))
 }
 
@@ -522,9 +548,67 @@ function mapDiagnosticToOriginal(
   }
 
   const local = diagnostic.start - span.replacementStart
-  const seg = span.segments.find(
+  let segIndex = span.segments.findIndex(
     s => diagnostic.start! >= s.rStart && diagnostic.start! < s.rEnd,
   )
+  const getSegmentWithDirection = (
+    startIdx: number,
+    direction: -1 | 1,
+    predicate: (candidate: Segment) => boolean,
+  ) => {
+    let idx = startIdx + direction
+    while (idx >= 0 && idx < span.segments.length) {
+      const candidate = span.segments[idx]
+      if (predicate(candidate)) return { segment: candidate, index: idx }
+      idx += direction
+    }
+    return undefined
+  }
+
+  let seg = segIndex === -1 ? undefined : span.segments[segIndex]
+  if (seg && !hasOriginalRange(seg)) {
+    if (seg.fallback === 'next') {
+      const resolved = getSegmentWithDirection(segIndex, 1, candidate =>
+        hasOriginalRange(candidate),
+      )
+      if (resolved) {
+        seg = resolved.segment
+        segIndex = resolved.index
+      }
+    } else if (seg.fallback === 'previous') {
+      const resolved = getSegmentWithDirection(segIndex, -1, candidate =>
+        hasOriginalRange(candidate),
+      )
+      if (resolved) {
+        seg = resolved.segment
+        segIndex = resolved.index
+      }
+    }
+  }
+
+  if (
+    seg &&
+    seg.kind === 'literal' &&
+    diagnostic.code === 2322 &&
+    diagnostic.file?.text
+  ) {
+    const literalText = diagnostic.file.text.slice(seg.rStart, seg.rEnd)
+    const literalIdx = diagnostic.start - seg.rStart
+    if (literalIdx >= 0 && literalIdx <= literalText.length) {
+      const suffix = literalText.slice(literalIdx)
+      if (suffix.includes('=')) {
+        const nextExpr = getSegmentWithDirection(
+          segIndex,
+          1,
+          candidate => candidate.kind === 'expr' && hasOriginalRange(candidate),
+        )
+        if (nextExpr) {
+          seg = nextExpr.segment
+          segIndex = nextExpr.index
+        }
+      }
+    }
+  }
 
   let mappedStart = span.originalStart + local
   let mappedLength = Math.min(
@@ -532,8 +616,11 @@ function mapDiagnosticToOriginal(
     diagnostic.length ?? 1,
   )
 
-  if (seg && seg.oStart !== undefined && seg.oEnd !== undefined) {
-    const offsetInSeg = diagnostic.start - seg.rStart
+  if (seg && hasOriginalRange(seg)) {
+    const segWidth = Math.max(0, seg.rEnd - seg.rStart)
+    const rawOffsetInSeg = diagnostic.start - seg.rStart
+    // Clamp offset so fallbacks that land just outside the expression don't inflate lengths
+    const offsetInSeg = Math.max(0, Math.min(rawOffsetInSeg, Math.max(segWidth - 1, 0)))
     const origLen = seg.oEnd - seg.oStart
     const mappedOffset = Math.min(offsetInSeg, Math.max(origLen - 1, 0))
     mappedStart = Math.max(seg.oStart, seg.oStart + mappedOffset)
@@ -546,6 +633,17 @@ function mapDiagnosticToOriginal(
     start: mappedStart,
     length: mappedLength,
   }
+}
+
+function hasOriginalRange(
+  seg: Segment | undefined,
+): seg is Segment & { oStart: number; oEnd: number } {
+  return (
+    seg !== undefined &&
+    seg.oStart !== undefined &&
+    seg.oEnd !== undefined &&
+    seg.oEnd > seg.oStart
+  )
 }
 
 function init(_modules: { typescript: typeof ts }) {
