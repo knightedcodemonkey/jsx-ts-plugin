@@ -12,7 +12,7 @@
     "lint": "oxlint packages",
     "prettier": "prettier --write .",
     "test": "npm run coverage",
-    "coverage": "c8 npm run test -w @knighted/jsx-ts-plugin",
+    "coverage": "c8 --reporter=text --reporter=lcov npm run test -w @knighted/jsx-ts-plugin",
     "prepare": "husky"
   },
   "devDependencies": {
