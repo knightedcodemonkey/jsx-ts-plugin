@@ -10,12 +10,16 @@
     "build": "npm run build -w @knighted/jsx-ts-plugin",
     "clean": "npm run clean -w @knighted/jsx-ts-plugin",
     "lint": "oxlint packages",
-    "prettier": "prettier --write ."
+    "prettier": "prettier --write .",
+    "test": "npm run test -w @knighted/jsx-ts-plugin",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@knighted/jsx": "file:../jsx",
     "@types/node": "^22.10.1",
-    "oxlint": "^1.32.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "oxlint": "^1.35.0",
     "prettier": "^3.7.4",
     "typescript": "^5.8.0"
   },
@@ -27,5 +31,11 @@
     "printWidth": 90,
     "semi": false,
     "singleQuote": true
+  },
+  "lint-staged": {
+    "*": [
+      "npm run lint",
+      "npm run prettier"
+    ]
   }
 }

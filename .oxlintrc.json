@@ -1,11 +1,21 @@
 {
   "$schema": "https://json.schemastore.org/oxlintrc",
-  "plugins": ["typescript", "unicorn", "oxc"],
+  "plugins": ["typescript", "unicorn", "oxc", "node"],
   "env": {
     "es2022": true,
     "node": true
   },
   "globals": {
     "process": "readonly"
+  },
+  "rules": {
+    "unicorn/filename-case": [
+      "error",
+      {
+        "cases": {
+          "kebabCase": true
+        }
+      }
+    ]
   }
 }

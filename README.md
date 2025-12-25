@@ -62,8 +62,12 @@ The inline directives can appear as block or line comments and apply to the very
 ```sh
 npm install
 npm run build
+npm test
 ```
 
 The root workspace intentionally lists `@knighted/jsx` as a `file:` devDependency so VS Code’s tsserver always resolves the locally built runtime while testing the plugin. Make sure you install from the repo root (and re-run `npm install` if you change the runtime) so those symlinks remain intact.
+
+> [!NOTE]
+> Running `npm test` rebuilds the plugin and invokes the verification harness under `packages/plugin/test/`. That harness loads the locally linked `@knighted/jsx` runtime, so run `npm run build` inside the `../jsx` repo first whenever you change the helper—otherwise the plugin will keep testing against stale runtime artifacts.
 
 Publish is handled by npm `prepare` via `npm run build`.
