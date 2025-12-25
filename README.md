@@ -1,6 +1,7 @@
 # @knighted/jsx-ts-plugin
 
 [![codecov](https://codecov.io/gh/knightedcodemonkey/jsx-ts-plugin/graph/badge.svg?token=aGVVmSjyQd)](https://codecov.io/gh/knightedcodemonkey/jsx-ts-plugin)
+[![NPM version](https://img.shields.io/npm/v/@knighted/jsx-ts-plugin.svg)](https://www.npmjs.com/package/@knighted/jsx-ts-plugin)
 
 Diagnostics-only TypeScript language service plugin for `@knighted/jsx` tagged templates (`jsx` / `reactJsx`). It rewrites tagged template literals into JSX on the fly and asks TypeScript for semantic diagnostics so you see JSX errors inside the template strings.
 

@@ -54,6 +54,23 @@ type TransformedFile = {
   spans: ReplacementSpan[]
 }
 
+type CachedTransformEntry =
+  | {
+      hasTemplates: false
+      version?: string
+      configKey: string
+    }
+  | {
+      hasTemplates: true
+      version?: string
+      configKey: string
+      transformed: TransformedFile
+      extraDiagnostics?: ts.Diagnostic[]
+      diagnosticsVersion?: string
+      completionService?: ts.LanguageService
+      completionProjectVersion?: string
+    }
+
 const DEFAULT_TAG_MODES: Record<string, Mode> = {
   jsx: 'dom',
   reactJsx: 'react',
@@ -61,6 +78,41 @@ const DEFAULT_TAG_MODES: Record<string, Mode> = {
 
 const DIRECTIVE_PATTERN =
   /\/\*\s*@jsx-(dom|react)\s*\*\/|\/\/\s*@jsx-(dom|react)\b[^\n\r]*/g
+
+function inferScriptKindFromFileName(fileName: string): ts.ScriptKind {
+  const ext = path.extname(fileName).toLowerCase()
+  switch (ext) {
+    case '.tsx':
+      return ts.ScriptKind.TSX
+    case '.ts':
+      return ts.ScriptKind.TS
+    case '.jsx':
+      return ts.ScriptKind.JSX
+    case '.js':
+    case '.mjs':
+    case '.cjs':
+      return ts.ScriptKind.JS
+    case '.mts':
+    case '.cts':
+      return ts.ScriptKind.TS
+    case '.json':
+      return ts.ScriptKind.JSON
+    default:
+      return ts.ScriptKind.Unknown
+  }
+}
+
+function computeConfigKey(tagModes: Map<string, Mode>, config: NormalizedConfig) {
+  const entries = Array.from(tagModes.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  const tagSignature = entries.map(([tag, mode]) => `${tag}:${mode}`).join('|')
+  return `${tagSignature}|${config.maxTemplatesPerFile ?? 'none'}`
+}
+
+function disposeCachedEntry(entry: CachedTransformEntry | undefined) {
+  if (entry && entry.hasTemplates && entry.completionService) {
+    entry.completionService.dispose?.()
+  }
+}
 
 type ModeDirective = {
   end: number
@@ -440,11 +492,118 @@ function buildSegments(
   }))
 }
 
+function ensureTransformEntry(
+  cache: Map<string, CachedTransformEntry>,
+  fileName: string,
+  sourceFile: ts.SourceFile,
+  version: string | undefined,
+  tagModes: Map<string, Mode>,
+  config: NormalizedConfig,
+  configKey: string,
+): CachedTransformEntry {
+  const normalized = path.normalize(fileName)
+  const existing = cache.get(normalized)
+  if (existing && existing.version === version && existing.configKey === configKey) {
+    return existing
+  }
+
+  disposeCachedEntry(existing)
+
+  const replacements = collectReplacements(sourceFile, tagModes)
+  if (!replacements.length) {
+    const entry: CachedTransformEntry = { hasTemplates: false, version, configKey }
+    cache.set(normalized, entry)
+    return entry
+  }
+
+  if (config.maxTemplatesPerFile && replacements.length > config.maxTemplatesPerFile) {
+    const entry: CachedTransformEntry = { hasTemplates: false, version, configKey }
+    cache.set(normalized, entry)
+    return entry
+  }
+
+  const transformed = applyReplacements(sourceFile, replacements)
+  const entry: CachedTransformEntry = {
+    hasTemplates: true,
+    version,
+    configKey,
+    transformed,
+  }
+  cache.set(normalized, entry)
+  return entry
+}
+
+function adjustPositionForEarlierSpans(spans: ReplacementSpan[], pos: number) {
+  let delta = 0
+  for (const span of spans) {
+    if (span.replacementEnd > pos) break
+    const replacementLength = span.replacementEnd - span.replacementStart
+    const originalLength = span.originalEnd - span.originalStart
+    delta += replacementLength - originalLength
+  }
+  return Math.max(0, pos - delta)
+}
+
+function computeTransformedDiagnostics(
+  fileName: string,
+  sourceFile: ts.SourceFile,
+  transformed: TransformedFile,
+  program: ts.Program,
+  baseHost: ts.LanguageServiceHost | undefined,
+) {
+  const opts = program.getCompilerOptions()
+  const rootNames = program.getRootFileNames()
+  const normalizedTarget = path.normalize(fileName)
+
+  const readFromHost = (f: string) => {
+    const normalized = path.normalize(f)
+    if (normalized === normalizedTarget) return transformed.text
+    const snapshot = baseHost?.getScriptSnapshot?.(f)
+    if (snapshot) return snapshot.getText(0, snapshot.getLength())
+    const existing = program.getSourceFile(normalized)
+    if (existing) return existing.text
+    return ts.sys.readFile(f)
+  }
+
+  const host = ts.createCompilerHost(opts, true)
+  host.readFile = readFromHost
+  host.fileExists = f => {
+    const normalized = path.normalize(f)
+    if (normalized === normalizedTarget) return true
+    if (baseHost?.fileExists) return baseHost.fileExists(f)
+    if (program.getSourceFile(normalized)) return true
+    return ts.sys.fileExists(f)
+  }
+  host.getSourceFile = (f, languageVersion) => {
+    const text = host.readFile(f)
+    if (text === undefined) return undefined
+    const normalized = path.normalize(f)
+    const scriptKind =
+      normalized === normalizedTarget
+        ? ts.ScriptKind.TSX
+        : (baseHost?.getScriptKind?.(f) ?? inferScriptKindFromFileName(f))
+    return ts.createSourceFile(f, text, languageVersion, true, scriptKind)
+  }
+
+  const diagProgram = ts.createProgram({ rootNames, options: opts, host })
+  const transformedSource = diagProgram.getSourceFile(fileName)
+  if (!transformedSource) return []
+
+  const normalizedFileName = path.normalize(fileName)
+  return ts
+    .getPreEmitDiagnostics(diagProgram, transformedSource)
+    .filter(d => d.file && path.normalize(d.file.fileName) === normalizedFileName)
+    .map(diag => mapDiagnosticToOriginal(diag, sourceFile, transformed.spans))
+}
+
 function createPlugin(info: ts.server.PluginCreateInfo) {
   if (!info || !info.languageService)
     return info?.languageService ?? ({} as ts.LanguageService)
   const config = normalizeConfig(info.config)
   const tagModes = config.tagModes
+  const configKey = computeConfigKey(tagModes, config)
+  const transformCache = new Map<string, CachedTransformEntry>()
+  const lsHost = info.languageServiceHost
 
   const diagKey = (d: ts.Diagnostic) => {
     const msg = ts.flattenDiagnosticMessageText(d.messageText, '\n')
@@ -469,46 +628,32 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     const sourceFile = program.getSourceFile(fileName)
     if (!sourceFile) return base
 
-    const replacements = collectReplacements(sourceFile, tagModes)
-    if (!replacements.length) return base
-    if (config.maxTemplatesPerFile && replacements.length > config.maxTemplatesPerFile)
-      return base
+    const version = lsHost?.getScriptVersion?.(fileName)
+    const entry = ensureTransformEntry(
+      transformCache,
+      fileName,
+      sourceFile,
+      version,
+      tagModes,
+      config,
+      configKey,
+    )
+    if (!entry.hasTemplates) return base
 
-    const transformed = applyReplacements(sourceFile, replacements)
-
-    const opts = program.getCompilerOptions()
-    const rootNames = program.getRootFileNames()
-    const normalizedTarget = path.normalize(fileName)
-
-    const host = ts.createCompilerHost(opts, true)
-    host.getSourceFile = (f, lv) => {
-      const normalized = path.normalize(f)
-      const text = normalized === normalizedTarget ? transformed.text : ts.sys.readFile(f)
-      if (text === undefined) return undefined
-      const scriptKind = opts.jsx ? ts.ScriptKind.TSX : undefined
-      return ts.createSourceFile(f, text, lv, true, scriptKind)
+    const projectVersion = lsHost?.getProjectVersion?.() ?? 'static'
+    if (!entry.extraDiagnostics || entry.diagnosticsVersion !== projectVersion) {
+      entry.extraDiagnostics = computeTransformedDiagnostics(
+        fileName,
+        sourceFile,
+        entry.transformed,
+        program,
+        lsHost,
+      )
+      entry.diagnosticsVersion = projectVersion
     }
-    host.readFile = f => {
-      const normalized = path.normalize(f)
-      if (normalized === normalizedTarget) return transformed.text
-      return ts.sys.readFile(f)
-    }
-    host.fileExists = f => {
-      const normalized = path.normalize(f)
-      if (normalized === normalizedTarget) return true
-      return ts.sys.fileExists(f)
-    }
-
-    const diagProgram = ts.createProgram({ rootNames, options: opts, host })
-    const transformedSource = diagProgram.getSourceFile(fileName)
-    if (!transformedSource) return base
-
-    const extraDiags = ts
-      .getPreEmitDiagnostics(diagProgram, transformedSource)
-      .filter(d => d.file && path.normalize(d.file.fileName) === normalizedTarget)
-      .map(diag => mapDiagnosticToOriginal(diag, sourceFile, transformed.spans))
 
     const baseKeys = new Set(base.map(diagKey))
+    const extraDiags = entry.extraDiagnostics ?? []
     const dedupedExtra = extraDiags.filter(d => !baseKeys.has(diagKey(d)))
 
     return [...base, ...dedupedExtra]
@@ -524,22 +669,11 @@ function mapDiagnosticToOriginal(
 ): ts.Diagnostic {
   if (!diagnostic.file || diagnostic.start == null) return diagnostic
 
-  const adjustForEarlierSpans = (pos: number) => {
-    let delta = 0
-    for (const span of spans) {
-      if (span.replacementEnd > pos) break
-      const replacementLength = span.replacementEnd - span.replacementStart
-      const originalLength = span.originalEnd - span.originalStart
-      delta += replacementLength - originalLength
-    }
-    return Math.max(0, pos - delta)
-  }
-
   const span = spans.find(
     s => diagnostic.start! >= s.replacementStart && diagnostic.start! <= s.replacementEnd,
   )
   if (!span) {
-    const adjustedStart = adjustForEarlierSpans(diagnostic.start)
+    const adjustedStart = adjustPositionForEarlierSpans(spans, diagnostic.start)
     return {
       ...diagnostic,
       file: sourceFile,
