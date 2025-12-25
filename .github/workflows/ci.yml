@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - name: Update npm
-        run: npm install -g npm@10.9.2
+        run: npm install -g npm@11.6.2
       - name: Provision published @knighted/jsx
         run: |
           rm -rf ../jsx
