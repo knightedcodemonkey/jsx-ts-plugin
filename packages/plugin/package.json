@@ -1,6 +1,6 @@
 {
   "name": "@knighted/jsx-ts-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript language service plugin for @knighted/jsx tagged template diagnostics.",
   "main": "dist/jsx-ts-plugin.js",
   "types": "dist/jsx-ts-plugin.d.ts",

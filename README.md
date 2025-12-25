@@ -8,7 +8,6 @@ Diagnostics-only TypeScript language service plugin for `@knighted/jsx` tagged t
 
 - MVP: diagnostics only (invalid props/attributes, JSX syntax issues, interpolation type errors).
 - No completions/hover/definitions yet.
-- Diagnostics are mapped back to the template start; positions are approximate in this first cut.
 
 ## Install
 

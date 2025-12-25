@@ -210,7 +210,20 @@ for (const sample of samples) {
       )
       diagnostics.forEach(diag => console.error('  -', formatDiagnostic(diag)))
     } else {
-      pending.splice(matchIndex, 1)
+      const matched = pending.splice(matchIndex, 1)[0]
+      if (expected.atText) {
+        const fileText = matched.file?.text ?? sample.source
+        const start = matched.start ?? -1
+        const snippet =
+          start >= 0 ? fileText.slice(start, start + expected.atText.length) : undefined
+        if (snippet !== expected.atText) {
+          hasFailures = true
+          console.error(
+            `✖ ${sample.name}: diagnostic TS${expected.code} did not start at the expected text "${expected.atText}"`,
+          )
+          console.error(`  - actual snippet: "${snippet ?? 'unknown'}" (offset ${start})`)
+        }
+      }
     }
   })
 

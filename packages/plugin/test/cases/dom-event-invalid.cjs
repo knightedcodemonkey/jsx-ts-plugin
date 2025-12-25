@@ -5,6 +5,7 @@ module.exports = [
       {
         code: 2322,
         messageIncludes: "Type 'string' is not assignable",
+        atText: '"nope"',
       },
     ],
     source: [
