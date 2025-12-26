@@ -40,12 +40,13 @@ module.exports = [
       {
         description: 'infoTarget property completion inside template',
         position: {
-          match: 'infoTarget.count',
-          offset: 'infoTarget.'.length + 'count'.length,
+          match: 'infoTarget.cou',
+          offset: 'infoTarget.cou'.length,
         },
         expectEntries: [
           {
             name: 'count',
+            details: {},
           },
         ],
       },

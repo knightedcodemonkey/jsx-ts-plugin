@@ -588,6 +588,28 @@ function mapTransformedTextSpanToOriginal(
   return { start, length: Math.max(0, end - start) }
 }
 
+function remapCompletionEntriesToOriginal(
+  entries: readonly ts.CompletionEntry[],
+  spans: ReplacementSpan[],
+): ts.CompletionEntry[] {
+  let mutated = false
+  const mappedEntries = entries.map(entry => {
+    if (!entry.replacementSpan) return entry
+    const mappedSpan = mapTransformedTextSpanToOriginal(entry.replacementSpan, spans)
+    if (!mappedSpan) return entry
+    mutated = true
+    return { ...entry, replacementSpan: mappedSpan }
+  })
+  return mutated ? mappedEntries : (entries as ts.CompletionEntry[])
+}
+
+function remapQuickInfoSpan(info: ts.QuickInfo, spans: ReplacementSpan[]) {
+  const mappedSpan = mapTransformedTextSpanToOriginal(info.textSpan, spans)
+  return mappedSpan && mappedSpan !== info.textSpan
+    ? { ...info, textSpan: mappedSpan }
+    : info
+}
+
 function getOrCreateTransformedLanguageService(
   fileName: string,
   entry: Extract<CachedTransformEntry, { hasTemplates: true }>,
@@ -866,19 +888,13 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     )
     if (!result) return fallback()
 
-    let mutated = false
-    const mappedEntries = result.entries.map(entry => {
-      if (!entry.replacementSpan) return entry
-      const mappedSpan = mapTransformedTextSpanToOriginal(
-        entry.replacementSpan,
-        context.entry.transformed.spans,
-      )
-      if (!mappedSpan) return entry
-      mutated = true
-      return { ...entry, replacementSpan: mappedSpan }
-    })
-
-    return mutated ? { ...result, entries: mappedEntries } : result
+    const mappedEntries = remapCompletionEntriesToOriginal(
+      result.entries,
+      context.entry.transformed.spans,
+    )
+    return mappedEntries !== result.entries
+      ? { ...result, entries: mappedEntries }
+      : result
   }
 
   proxy.getCompletionEntryDetails = (
@@ -938,13 +954,7 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     )
     if (!info) return baseLs.getQuickInfoAtPosition(fileName, position)
 
-    const mappedSpan = mapTransformedTextSpanToOriginal(
-      info.textSpan,
-      context.entry.transformed.spans,
-    )
-    return mappedSpan && mappedSpan !== info.textSpan
-      ? { ...info, textSpan: mappedSpan }
-      : info
+    return remapQuickInfoSpan(info, context.entry.transformed.spans)
   }
 
   return proxy
@@ -1068,6 +1078,28 @@ function hasOriginalRange(
   )
 }
 
+type TestingExports = {
+  inferScriptKindFromFileName: typeof inferScriptKindFromFileName
+  disposeCachedEntry: typeof disposeCachedEntry
+  lastNonWhitespaceChar: typeof lastNonWhitespaceChar
+  mapReplacementPositionToOriginal: typeof mapReplacementPositionToOriginal
+  mapOriginalPositionToReplacement: typeof mapOriginalPositionToReplacement
+  mapDiagnosticToOriginal: typeof mapDiagnosticToOriginal
+  remapCompletionEntriesToOriginal: typeof remapCompletionEntriesToOriginal
+  remapQuickInfoSpan: typeof remapQuickInfoSpan
+}
+
+const testingApi: TestingExports = {
+  inferScriptKindFromFileName,
+  disposeCachedEntry,
+  lastNonWhitespaceChar,
+  mapReplacementPositionToOriginal,
+  mapOriginalPositionToReplacement,
+  mapDiagnosticToOriginal,
+  remapCompletionEntriesToOriginal,
+  remapQuickInfoSpan,
+}
+
 function init(_modules: { typescript: typeof ts }) {
   return {
     create(info: ts.server.PluginCreateInfo) {
@@ -1075,5 +1107,7 @@ function init(_modules: { typescript: typeof ts }) {
     },
   }
 }
+
+;(init as typeof init & { __testing?: TestingExports }).__testing = testingApi
 
 export = init

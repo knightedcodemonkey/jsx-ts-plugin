@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "prepack": "npm run build",
-    "test": "npm run build && node test/verify-plugin.cjs"
+    "test": "npm run build && node test/verify-plugin.cjs && node test/internal-coverage.cjs"
   },
   "files": [
     "dist"
