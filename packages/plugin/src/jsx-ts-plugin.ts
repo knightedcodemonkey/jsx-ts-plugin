@@ -71,6 +71,8 @@ type CachedTransformEntry =
       completionProjectVersion?: string
     }
 
+const documentRegistry = ts.createDocumentRegistry()
+
 const DEFAULT_TAG_MODES: Record<string, Mode> = {
   jsx: 'dom',
   reactJsx: 'react',
@@ -544,6 +546,156 @@ function adjustPositionForEarlierSpans(spans: ReplacementSpan[], pos: number) {
   return Math.max(0, pos - delta)
 }
 
+function mapReplacementPositionToOriginal(spans: ReplacementSpan[], pos: number) {
+  const span = spans.find(s => pos >= s.replacementStart && pos <= s.replacementEnd)
+  if (!span) {
+    return adjustPositionForEarlierSpans(spans, pos)
+  }
+
+  const seg = span.segments.find(s => pos >= s.rStart && pos <= s.rEnd)
+  if (seg && seg.oStart !== undefined && seg.oEnd !== undefined) {
+    const offsetInSeg = pos - seg.rStart
+    const origLen = seg.oEnd - seg.oStart
+    const mappedOffset = Math.min(offsetInSeg, Math.max(origLen - 1, 0))
+    return Math.max(seg.oStart, seg.oStart + mappedOffset)
+  }
+
+  return span.originalStart + (pos - span.replacementStart)
+}
+
+function mapOriginalPositionToReplacement(spans: ReplacementSpan[], pos: number) {
+  const span = spans.find(s => pos >= s.originalStart && pos <= s.originalEnd)
+  if (!span) return undefined
+
+  for (const seg of span.segments) {
+    if (seg.oStart === undefined || seg.oEnd === undefined) continue
+    if (pos >= seg.oStart && pos <= seg.oEnd) {
+      const offset = Math.min(pos - seg.oStart, seg.oEnd - seg.oStart)
+      return seg.rStart + offset
+    }
+  }
+
+  return span.replacementStart + (pos - span.originalStart)
+}
+
+function mapTransformedTextSpanToOriginal(
+  textSpan: ts.TextSpan,
+  spans: ReplacementSpan[],
+): ts.TextSpan | undefined {
+  const start = mapReplacementPositionToOriginal(spans, textSpan.start)
+  const end = mapReplacementPositionToOriginal(spans, textSpan.start + textSpan.length)
+  if (start === undefined || end === undefined) return undefined
+  return { start, length: Math.max(0, end - start) }
+}
+
+function getOrCreateTransformedLanguageService(
+  fileName: string,
+  entry: Extract<CachedTransformEntry, { hasTemplates: true }>,
+  baseProgram: ts.Program,
+  baseHost: ts.LanguageServiceHost | undefined,
+): ts.LanguageService {
+  if (entry.completionService) return entry.completionService
+
+  const normalizedTarget = path.normalize(fileName)
+  const compilerOptions = baseProgram.getCompilerOptions()
+  const hostFileNames = [
+    ...((baseHost?.getScriptFileNames?.() ?? baseProgram.getRootFileNames()) as
+      | string[]
+      | readonly string[]),
+  ]
+  const scriptFileNames = hostFileNames.includes(normalizedTarget)
+    ? [...hostFileNames]
+    : [...hostFileNames, normalizedTarget]
+
+  const serviceHost: ts.LanguageServiceHost = {
+    getCompilationSettings: () => compilerOptions,
+    getScriptFileNames: () => [...scriptFileNames],
+    getScriptVersion: f => {
+      const normalized = path.normalize(f)
+      if (normalized === normalizedTarget) return `${entry.version ?? '0'}-transformed`
+      return baseHost?.getScriptVersion?.(f) ?? '0'
+    },
+    getScriptSnapshot: f => {
+      const normalized = path.normalize(f)
+      if (normalized === normalizedTarget) {
+        return ts.ScriptSnapshot.fromString(entry.transformed.text)
+      }
+      const snapshot = baseHost?.getScriptSnapshot?.(f)
+      if (snapshot) return snapshot
+      const source = baseProgram.getSourceFile(normalized)
+      if (source) return ts.ScriptSnapshot.fromString(source.text)
+      const text = ts.sys.readFile(normalized)
+      return text === undefined ? undefined : ts.ScriptSnapshot.fromString(text)
+    },
+    fileExists: f => baseHost?.fileExists?.(f) ?? ts.sys.fileExists(f),
+    readFile: f => baseHost?.readFile?.(f) ?? ts.sys.readFile(f),
+    directoryExists: d =>
+      baseHost?.directoryExists?.(d) ?? ts.sys.directoryExists?.(d) ?? true,
+    getDirectories: d =>
+      baseHost?.getDirectories?.(d) ?? ts.sys.getDirectories?.(d) ?? [],
+    readDirectory: (dir, extensions, excludes, includes, depth) =>
+      baseHost?.readDirectory?.(dir, extensions, excludes, includes, depth) ??
+      ts.sys.readDirectory(dir, extensions, excludes, includes, depth),
+    realpath: baseHost?.realpath?.bind(baseHost) ?? ts.sys.realpath?.bind(ts.sys),
+    getCurrentDirectory: () =>
+      baseHost?.getCurrentDirectory?.() ?? ts.sys.getCurrentDirectory(),
+    getDefaultLibFileName: options => ts.getDefaultLibFilePath(options),
+    getNewLine: () => baseHost?.getNewLine?.() ?? ts.sys.newLine,
+    useCaseSensitiveFileNames: () =>
+      baseHost?.useCaseSensitiveFileNames?.() ?? ts.sys.useCaseSensitiveFileNames,
+    resolveModuleNames: baseHost?.resolveModuleNames
+      ? (moduleNames, containingFile, ...rest) =>
+          baseHost.resolveModuleNames!(moduleNames, containingFile, ...rest)
+      : undefined,
+    getScriptKind: f => {
+      if (path.normalize(f) === normalizedTarget) return ts.ScriptKind.TSX
+      const fromHost = baseHost?.getScriptKind?.(f)
+      if (fromHost !== undefined) return fromHost
+      return inferScriptKindFromFileName(f)
+    },
+    getProjectVersion: () => baseHost?.getProjectVersion?.() ?? '',
+  }
+
+  const service = ts.createLanguageService(serviceHost, documentRegistry)
+  entry.completionService = service
+  return service
+}
+
+function remapCodeActionsToOriginal(
+  fileName: string,
+  spans: ReplacementSpan[],
+  actions: readonly ts.CodeAction[] | undefined,
+) {
+  if (!actions?.length) return actions
+  const normalizedTarget = path.normalize(fileName)
+  let mutated = false
+
+  const mappedActions = actions.map(action => {
+    let actionMutated = false
+    const mappedChanges = action.changes.map(change => {
+      if (path.normalize(change.fileName) !== normalizedTarget) return change
+
+      let changeMutated = false
+      const mappedTextChanges = change.textChanges.map(textChange => {
+        const mappedSpan = mapTransformedTextSpanToOriginal(textChange.span, spans)
+        if (!mappedSpan) return textChange
+        changeMutated = true
+        return { ...textChange, span: mappedSpan }
+      })
+
+      if (!changeMutated) return change
+      actionMutated = true
+      return { ...change, textChanges: mappedTextChanges }
+    })
+
+    if (!actionMutated) return action
+    mutated = true
+    return { ...action, changes: mappedChanges }
+  })
+
+  return mutated ? mappedActions : actions
+}
+
 function computeTransformedDiagnostics(
   fileName: string,
   sourceFile: ts.SourceFile,
@@ -620,6 +772,41 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     proxy[k] = typeof x === 'function' ? x.bind(baseLs) : x
   }
 
+  const getTransformedContext = (fileName: string, position: number) => {
+    const program = info.languageService.getProgram()
+    if (!program) return undefined
+
+    const sourceFile = program.getSourceFile(fileName)
+    if (!sourceFile) return undefined
+
+    const version = lsHost?.getScriptVersion?.(fileName)
+    const entry = ensureTransformEntry(
+      transformCache,
+      fileName,
+      sourceFile,
+      version,
+      tagModes,
+      config,
+      configKey,
+    )
+    if (!entry.hasTemplates) return undefined
+
+    const transformedPosition = mapOriginalPositionToReplacement(
+      entry.transformed.spans,
+      position,
+    )
+    if (transformedPosition === undefined) return undefined
+
+    const service = getOrCreateTransformedLanguageService(
+      fileName,
+      entry,
+      program,
+      lsHost,
+    )
+
+    return { entry, service, transformedPosition, sourceFile, program }
+  }
+
   proxy.getSemanticDiagnostics = (fileName: string) => {
     const base = info.languageService.getSemanticDiagnostics(fileName)
     const program = info.languageService.getProgram()
@@ -657,6 +844,107 @@ function createPlugin(info: ts.server.PluginCreateInfo) {
     const dedupedExtra = extraDiags.filter(d => !baseKeys.has(diagKey(d)))
 
     return [...base, ...dedupedExtra]
+  }
+
+  proxy.getCompletionsAtPosition = (
+    fileName: string,
+    position: number,
+    options?: ts.GetCompletionsAtPositionOptions,
+    formattingSettings?: ts.FormatCodeSettings,
+  ) => {
+    const fallback = () =>
+      baseLs.getCompletionsAtPosition(fileName, position, options, formattingSettings)
+
+    const context = getTransformedContext(fileName, position)
+    if (!context) return fallback()
+
+    const result = context.service.getCompletionsAtPosition(
+      fileName,
+      context.transformedPosition,
+      options,
+      formattingSettings,
+    )
+    if (!result) return fallback()
+
+    let mutated = false
+    const mappedEntries = result.entries.map(entry => {
+      if (!entry.replacementSpan) return entry
+      const mappedSpan = mapTransformedTextSpanToOriginal(
+        entry.replacementSpan,
+        context.entry.transformed.spans,
+      )
+      if (!mappedSpan) return entry
+      mutated = true
+      return { ...entry, replacementSpan: mappedSpan }
+    })
+
+    return mutated ? { ...result, entries: mappedEntries } : result
+  }
+
+  proxy.getCompletionEntryDetails = (
+    fileName: string,
+    position: number,
+    entryName: string,
+    formatOptions?: ts.FormatCodeOptions | ts.FormatCodeSettings,
+    source?: string,
+    preferences?: ts.UserPreferences,
+    data?: ts.CompletionEntryData,
+  ) => {
+    const context = getTransformedContext(fileName, position)
+    if (context) {
+      const details = context.service.getCompletionEntryDetails(
+        fileName,
+        context.transformedPosition,
+        entryName,
+        formatOptions,
+        source,
+        preferences,
+        data,
+      )
+      if (details) {
+        const mappedCodeActions = remapCodeActionsToOriginal(
+          fileName,
+          context.entry.transformed.spans,
+          details.codeActions,
+        )
+        if (mappedCodeActions !== details.codeActions) {
+          return {
+            ...details,
+            codeActions: mappedCodeActions ? [...mappedCodeActions] : mappedCodeActions,
+          }
+        }
+        return details
+      }
+    }
+
+    return baseLs.getCompletionEntryDetails(
+      fileName,
+      position,
+      entryName,
+      formatOptions,
+      source,
+      preferences,
+      data,
+    )
+  }
+
+  proxy.getQuickInfoAtPosition = (fileName: string, position: number) => {
+    const context = getTransformedContext(fileName, position)
+    if (!context) return baseLs.getQuickInfoAtPosition(fileName, position)
+
+    const info = context.service.getQuickInfoAtPosition(
+      fileName,
+      context.transformedPosition,
+    )
+    if (!info) return baseLs.getQuickInfoAtPosition(fileName, position)
+
+    const mappedSpan = mapTransformedTextSpanToOriginal(
+      info.textSpan,
+      context.entry.transformed.spans,
+    )
+    return mappedSpan && mappedSpan !== info.textSpan
+      ? { ...info, textSpan: mappedSpan }
+      : info
   }
 
   return proxy
