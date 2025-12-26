@@ -16,6 +16,13 @@ const compilerOptions = {
   allowSyntheticDefaultImports: true,
 }
 
+const defaultFormatCodeSettings = {
+  indentSize: 2,
+  tabSize: 2,
+  convertTabsToSpaces: true,
+  newLineCharacter: ts.sys.newLine ?? '\n',
+}
+
 const CASES_DIR = path.join(__dirname, 'cases')
 
 const flattenSamples = mod => {
@@ -81,9 +88,18 @@ if (!samples.length) {
 const noopWatcher = () => ({ close() {} })
 const pluginFactory = initPlugin({ typescript: ts })
 
+const sampleSourceFileCache = new WeakMap()
+
 function createLanguageService(sample) {
-  const fileName = path.join(process.cwd(), '__virtual__', sample.name)
+  const baseDir = path.join(process.cwd(), '__virtual__')
+  const fileName = path.join(baseDir, sample.name)
   const files = new Map([[fileName, { text: sample.source, version: 0 }]])
+  if (sample.extraFiles && typeof sample.extraFiles === 'object') {
+    Object.entries(sample.extraFiles).forEach(([relativePath, text]) => {
+      const resolved = path.join(baseDir, relativePath)
+      files.set(resolved, { text, version: 0 })
+    })
+  }
   const fileExists = file => files.has(file) || ts.sys.fileExists(file)
   const readFile = file =>
     files.has(file) ? files.get(file).text : ts.sys.readFile(file)
@@ -167,34 +183,28 @@ function formatDiagnostic(diagnostic) {
   return `${relPath}:${line + 1}:${character + 1} - ${message} (TS${diagnostic.code})`
 }
 
-let hasFailures = false
-
-for (const sample of samples) {
-  const { plugin, fileName } = createLanguageService(sample)
-  const diagnostics = plugin.getSemanticDiagnostics(fileName)
-
+function validateDiagnostics(sample, diagnostics) {
   if (!sample.expectDiagnostics.length) {
     if (diagnostics.length === 0) {
       console.log(`✔ ${sample.name}: no diagnostics`)
-    } else {
-      hasFailures = true
-      console.error(
-        `✖ ${sample.name}: expected no diagnostics but received ${diagnostics.length}`,
-      )
-      diagnostics.forEach(diag => console.error('  -', formatDiagnostic(diag)))
+      return true
     }
-    continue
+    console.error(
+      `✖ ${sample.name}: expected no diagnostics but received ${diagnostics.length}`,
+    )
+    diagnostics.forEach(diag => console.error('  -', formatDiagnostic(diag)))
+    return false
   }
 
   if (diagnostics.length !== sample.expectDiagnostics.length) {
-    hasFailures = true
     console.error(
       `✖ ${sample.name}: expected ${sample.expectDiagnostics.length} diagnostics but received ${diagnostics.length}`,
     )
     diagnostics.forEach(diag => console.error('  -', formatDiagnostic(diag)))
-    continue
+    return false
   }
 
+  let success = true
   const pending = [...diagnostics]
 
   sample.expectDiagnostics.forEach(expected => {
@@ -204,7 +214,7 @@ for (const sample of samples) {
     })
 
     if (matchIndex === -1) {
-      hasFailures = true
+      success = false
       console.error(
         `✖ ${sample.name}: missing diagnostic TS${expected.code} containing "${expected.messageIncludes}"`,
       )
@@ -217,7 +227,7 @@ for (const sample of samples) {
         const snippet =
           start >= 0 ? fileText.slice(start, start + expected.atText.length) : undefined
         if (snippet !== expected.atText) {
-          hasFailures = true
+          success = false
           console.error(
             `✖ ${sample.name}: diagnostic TS${expected.code} did not start at the expected text "${expected.atText}"`,
           )
@@ -227,8 +237,284 @@ for (const sample of samples) {
     }
   })
 
-  if (!hasFailures) {
+  if (success) {
     console.log(`✔ ${sample.name}: diagnostics match expectations`)
+  }
+  return success
+}
+
+function verifyCompletionExpectations(sample, plugin, fileName) {
+  let success = true
+  sample.completions.forEach(expectation => {
+    const description = expectation.description ?? 'completion expectation'
+    let position
+    try {
+      position = resolveSamplePosition(sample, expectation.position)
+    } catch (error) {
+      success = false
+      console.error(`✖ ${sample.name}: ${description} - ${error.message}`)
+      return
+    }
+
+    const result = plugin.getCompletionsAtPosition(
+      fileName,
+      position,
+      expectation.options,
+      expectation.formatOptions,
+    )
+
+    if (!result) {
+      success = false
+      console.error(`✖ ${sample.name}: ${description} - no completions returned`)
+      return
+    }
+
+    if (Array.isArray(expectation.expectEntries)) {
+      expectation.expectEntries.forEach(entryExpectation => {
+        const entry = result.entries.find(
+          candidate => candidate.name === entryExpectation.name,
+        )
+        if (!entry) {
+          success = false
+          console.error(
+            `✖ ${sample.name}: ${description} - missing completion entry "${entryExpectation.name}"`,
+          )
+          return
+        }
+
+        if (entryExpectation.replacementSpanText !== undefined) {
+          if (!entry.replacementSpan) {
+            success = false
+            console.error(
+              `✖ ${sample.name}: ${description} - entry "${entryExpectation.name}" did not include a replacement span`,
+            )
+          } else {
+            const snippet = sample.source.slice(
+              entry.replacementSpan.start,
+              entry.replacementSpan.start + entry.replacementSpan.length,
+            )
+            if (snippet !== entryExpectation.replacementSpanText) {
+              success = false
+              console.error(
+                `✖ ${sample.name}: ${description} - entry "${entryExpectation.name}" replacement text mismatch (expected "${entryExpectation.replacementSpanText}", received "${snippet}")`,
+              )
+            }
+          }
+        }
+
+        if (entryExpectation.details) {
+          const formatOptions =
+            entryExpectation.details.formatOptions ?? defaultFormatCodeSettings
+          const details = plugin.getCompletionEntryDetails(
+            fileName,
+            position,
+            entryExpectation.name,
+            formatOptions,
+            entryExpectation.details.source ?? entry.source,
+            entryExpectation.details.preferences,
+            entry.data,
+          )
+
+          if (!details) {
+            success = false
+            console.error(
+              `✖ ${sample.name}: ${description} - missing completion details for "${entryExpectation.name}"`,
+            )
+            return
+          }
+
+          const textChanges = collectCodeActionTextChanges(details.codeActions)
+          if (entryExpectation.details.codeActionTextIncludes) {
+            const combined = textChanges
+              .map(({ textChange }) => textChange.newText)
+              .join('\n')
+            if (!combined.includes(entryExpectation.details.codeActionTextIncludes)) {
+              success = false
+              console.error(
+                `✖ ${sample.name}: ${description} - completion code actions did not contain "${entryExpectation.details.codeActionTextIncludes}"`,
+              )
+            }
+          }
+
+          if (entryExpectation.details.codeActionSpanStart !== undefined) {
+            if (!textChanges.length) {
+              success = false
+              console.error(
+                `✖ ${sample.name}: ${description} - expected code action span but no text changes were supplied`,
+              )
+            } else {
+              const expectedSpanStart =
+                typeof entryExpectation.details.codeActionSpanStart === 'object'
+                  ? resolveSamplePosition(
+                      sample,
+                      entryExpectation.details.codeActionSpanStart,
+                    )
+                  : entryExpectation.details.codeActionSpanStart
+              const span = textChanges[0].textChange.span
+              if (!span || span.start !== expectedSpanStart) {
+                success = false
+                console.error(
+                  `✖ ${sample.name}: ${description} - expected first code action span to start at ${expectedSpanStart}, received ${span?.start ?? 'unknown'}`,
+                )
+              }
+            }
+          }
+        }
+      })
+    }
+  })
+
+  if (success) {
+    console.log(`✔ ${sample.name}: completion expectations satisfied`)
+  }
+  return success
+}
+
+function verifyQuickInfoExpectations(sample, plugin, fileName) {
+  let success = true
+  sample.quickInfo.forEach(expectation => {
+    const description = expectation.description ?? 'quick info expectation'
+    let position
+    try {
+      position = resolveSamplePosition(sample, expectation.position)
+    } catch (error) {
+      success = false
+      console.error(`✖ ${sample.name}: ${description} - ${error.message}`)
+      return
+    }
+
+    const info = plugin.getQuickInfoAtPosition(fileName, position)
+    if (!info) {
+      success = false
+      console.error(`✖ ${sample.name}: ${description} - no quick info returned`)
+      return
+    }
+
+    if (Array.isArray(expectation.textIncludes)) {
+      const flattened = ts.displayPartsToString(info.displayParts)
+      expectation.textIncludes.forEach(fragment => {
+        if (!flattened.includes(fragment)) {
+          success = false
+          console.error(
+            `✖ ${sample.name}: ${description} - quick info text missing "${fragment}"`,
+          )
+        }
+      })
+    }
+
+    if (expectation.expectSpanText !== undefined) {
+      const snippet = sample.source.slice(
+        info.textSpan.start,
+        info.textSpan.start + info.textSpan.length,
+      )
+      if (snippet !== expectation.expectSpanText) {
+        success = false
+        console.error(
+          `✖ ${sample.name}: ${description} - quick info span mismatch (expected "${expectation.expectSpanText}", received "${snippet}")`,
+        )
+      }
+    }
+  })
+
+  if (success) {
+    console.log(`✔ ${sample.name}: quick info expectations satisfied`)
+  }
+  return success
+}
+
+function resolveSamplePosition(sample, locator) {
+  if (typeof locator === 'number') {
+    return locator
+  }
+
+  if (locator && typeof locator === 'object') {
+    if (typeof locator.line === 'number' && typeof locator.character === 'number') {
+      const sourceFile = getSampleSourceFile(sample)
+      return ts.getPositionOfLineAndCharacter(
+        sourceFile,
+        locator.line - 1,
+        locator.character - 1,
+      )
+    }
+
+    if (typeof locator.match === 'string') {
+      const occurrence = locator.occurrence ?? 0
+      let fromIndex = 0
+      let index = -1
+      for (let i = 0; i <= occurrence; i += 1) {
+        index = sample.source.indexOf(locator.match, fromIndex)
+        if (index === -1) break
+        fromIndex = index + locator.match.length
+      }
+      if (index === -1) {
+        throw new Error(
+          `could not find match "${locator.match}" at occurrence ${occurrence}`,
+        )
+      }
+      return index + (locator.offset ?? 0)
+    }
+
+    if (typeof locator.offset === 'number') {
+      return locator.offset
+    }
+  }
+
+  throw new Error('invalid position locator')
+}
+
+function getSampleSourceFile(sample) {
+  let cached = sampleSourceFileCache.get(sample)
+  if (!cached) {
+    cached = ts.createSourceFile(
+      sample.name,
+      sample.source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    )
+    sampleSourceFileCache.set(sample, cached)
+  }
+  return cached
+}
+
+function collectCodeActionTextChanges(codeActions) {
+  if (!codeActions?.length) return []
+  const bucket = []
+  codeActions.forEach(action => {
+    action.changes.forEach(change => {
+      change.textChanges.forEach(textChange => {
+        bucket.push({ action, change, textChange })
+      })
+    })
+  })
+  return bucket
+}
+
+let hasFailures = false
+
+for (const sample of samples) {
+  const { plugin, fileName } = createLanguageService(sample)
+  const diagnostics = plugin.getSemanticDiagnostics(fileName)
+
+  const diagnosticsOk = validateDiagnostics(sample, diagnostics)
+  let sampleFailed = !diagnosticsOk
+
+  if (diagnosticsOk && Array.isArray(sample.completions) && sample.completions.length) {
+    const completionsOk = verifyCompletionExpectations(sample, plugin, fileName)
+    if (!completionsOk) {
+      sampleFailed = true
+    }
+  }
+
+  if (diagnosticsOk && Array.isArray(sample.quickInfo) && sample.quickInfo.length) {
+    const quickInfoOk = verifyQuickInfoExpectations(sample, plugin, fileName)
+    if (!quickInfoOk) {
+      sampleFailed = true
+    }
+  }
+
+  if (sampleFailed) {
+    hasFailures = true
   }
 }
 

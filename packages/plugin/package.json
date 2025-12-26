@@ -1,6 +1,6 @@
 {
   "name": "@knighted/jsx-ts-plugin",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "TypeScript language service plugin for @knighted/jsx tagged template diagnostics.",
   "main": "dist/jsx-ts-plugin.js",
   "types": "dist/jsx-ts-plugin.d.ts",
@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "prepack": "npm run build",
-    "test": "npm run build && node test/verify-plugin.cjs"
+    "test": "npm run build && node test/verify-plugin.cjs && node test/internal-coverage.cjs"
   },
   "files": [
     "dist"
