@@ -11,6 +11,16 @@ TypeScript language service plugin for `@knighted/jsx` tagged templates (`jsx` /
 npm install -D @knighted/jsx-ts-plugin
 ```
 
+If you use `reactJsx` templates and want React-specific diagnostics/completions,
+install React's type package too:
+
+```sh
+npm install -D @types/react
+```
+
+`@types/react` is an optional peer dependency. DOM-only (`jsx`) usage does not
+require it.
+
 ## Configure (tsconfig.json)
 
 ```json
@@ -58,6 +68,8 @@ The inline directives can appear as block or line comments and apply to the very
 ## Notes / Limitations
 
 - Requires TypeScript >= 5.4 (peer dependency).
+- React-mode diagnostics depend on `@types/react` being resolvable by the active
+  TypeScript server.
 
 ## Development
 

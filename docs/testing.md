@@ -20,6 +20,9 @@ npm install
 
 The fixture’s `package.json` already points `@knighted/jsx-ts-plugin` to `file:../plugin` and `@knighted/jsx` to `file:../../jsx`, so it will consume both your local plugin build and your local runtime build automatically. Because `tsconfig.json` sets `jsxImportSource` to `@knighted/jsx`, no additional `paths` overrides or stub files are required for DOM diagnostics.
 
+React-focused fixture diagnostics additionally require `@types/react` to be
+installed and resolvable in the workspace.
+
 ## 3. Open the fixture in VS Code
 
 1. Launch VS Code with the repo root (or directly inside `packages/fixtures`).
@@ -45,5 +48,7 @@ This only exercises baseline TypeScript types, but it is useful for catching reg
 - Is VS Code using the workspace TypeScript version (Command Palette → _TypeScript: Select TypeScript Version_)?
 - Did you restart the TS server (Command Palette → _TypeScript: Restart TS Server_) after rebuilding?
 - Does the Problems panel list diagnostics with file paths under `packages/fixtures/src`? If not, open the output channel **TypeScript** to inspect plugin load errors.
+- Missing React-only squiggles? Confirm `@types/react` is installed where
+  `tsserver` resolves dependencies.
 
 Following this loop keeps fixture testing quick and repeatable, and mirrors the exact steps end users will perform when enabling the plugin in their editors.

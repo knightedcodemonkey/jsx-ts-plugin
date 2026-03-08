@@ -1,6 +1,6 @@
 {
   "name": "@knighted/jsx-ts-plugin",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "TypeScript language service plugin for @knighted/jsx tagged template diagnostics.",
   "main": "dist/jsx-ts-plugin.js",
   "types": "dist/jsx-ts-plugin.d.ts",
@@ -38,8 +38,17 @@
   "bugs": {
     "url": "https://github.com/knightedcodemonkey/jsx-ts-plugin/issues"
   },
+  "devDependencies": {
+    "@types/react": "^19.2.7"
+  },
   "peerDependencies": {
+    "@types/react": ">=18",
     "typescript": ">=5.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22"
