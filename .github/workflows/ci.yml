@@ -13,7 +13,7 @@ jobs:
     name: CI (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     env:
-      KNIGHTED_JSX_VERSION: '1.5.1'
+      KNIGHTED_JSX_VERSION: '1.7.7'
     strategy:
       fail-fast: false
       matrix:
@@ -22,9 +22,9 @@ jobs:
           - '24.11.1'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v6.0.1
       - name: Setup Node
-        uses: actions/setup-node@v4.3.0
+        uses: actions/setup-node@v6.2.0
         with:
           node-version: ${{ matrix.node-version }}
       - name: Update npm
@@ -38,8 +38,12 @@ jobs:
           rm "$TARBALL"
       - name: Install Dependencies
         run: npm ci --ignore-scripts
+      - name: Link dependencies for published @knighted/jsx
+        run: |
+          rm -rf ../jsx/node_modules
+          ln -s "$GITHUB_WORKSPACE/node_modules" ../jsx/node_modules
       - name: Save error log
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v6.0.0
         if: ${{ failure() }}
         with:
           name: npm-debug-log-${{ hashFiles('package-lock.json') }}
