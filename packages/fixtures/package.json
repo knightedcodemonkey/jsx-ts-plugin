@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@types/react": "^19.2.7",
     "@knighted/jsx": "file:../../jsx",
     "@knighted/jsx-ts-plugin": "file:../plugin"
   }

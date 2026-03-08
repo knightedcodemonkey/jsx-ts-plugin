@@ -9,6 +9,7 @@ import {
 } from './views/directive-override-errors.js'
 import { ReactCard } from './views/react-card.js'
 import { ReactChildrenErrors } from './views/react-children-errors.js'
+import { ReactChildrenPropErrors } from './views/react-children-prop-errors.js'
 import { ReactErrors } from './views/react-errors.js'
 import { ReactMultiDiagnosticSameTemplate } from './views/react-multi-diagnostic-same-template.js'
 import { ReactTagPositionErrors } from './views/react-tag-position-errors.js'
@@ -22,6 +23,7 @@ export {
   DomDirectiveOverrideError,
   ReactCard,
   ReactChildrenErrors,
+  ReactChildrenPropErrors,
   ReactDirectiveOverrideError,
   ReactErrors,
   ReactMultiDiagnosticSameTemplate,

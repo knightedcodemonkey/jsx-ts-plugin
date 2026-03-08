@@ -38,6 +38,11 @@ jobs:
           rm "$TARBALL"
       - name: Install Dependencies
         run: npm ci --ignore-scripts
+      - name: Wire React types for published @knighted/jsx
+        run: |
+          mkdir -p ../jsx/node_modules/@types
+          cp -R node_modules/@types/react ../jsx/node_modules/@types/react
+          cp -R node_modules/csstype ../jsx/node_modules/csstype
       - name: Save error log
         uses: actions/upload-artifact@v6.0.0
         if: ${{ failure() }}
